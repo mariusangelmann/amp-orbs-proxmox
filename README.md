@@ -109,7 +109,9 @@ status is more than 2 days old, that is reported too.
       ([`host/create-provider-ct.sh`](host/create-provider-ct.sh)).
 
    To run it without prompts, set the answers in the environment, for example
-   `STORAGE=local BRIDGE=vmbr0 AMP_ORB_PROVIDER_TOKEN=aop_live_… ./install.sh </dev/null`.
+   `STORAGE=local BRIDGE=vmbr0 ./install.sh </dev/null`. Pass the token with
+   `read -rs AMP_ORB_PROVIDER_TOKEN && export AMP_ORB_PROVIDER_TOKEN` first rather than on
+   the command line, where it would end up in your shell history.
 
 3. **Start a thread.** In the composer, open **Orb**, choose your provider under
    **Self-Hosted**, and send a prompt. From the CLI:

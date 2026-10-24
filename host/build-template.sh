@@ -65,7 +65,7 @@ cleanup() {
 cleanup # leftovers from an interrupted run
 trap cleanup EXIT
 
-log "Pulling $IMAGE"
+log "Pulling $IMAGE (pin a digest with IMAGE=...@sha256:... to build exactly that image)"
 skopeo copy --override-os linux --override-arch amd64 "docker://$IMAGE" "oci:$oci:orb"
 digest=$(skopeo inspect --format '{{.Digest}}' "oci:$oci:orb")
 skopeo inspect --config "oci:$oci:orb" >"$WORKDIR/config.json"
@@ -97,7 +97,12 @@ image_path=$(sed -n 's/^PATH=//p' "$mnt/etc/amp-orb/image.env")
 printf '[Manager]\nDefaultEnvironment="PATH=%s"\n' "$image_path" \
 	>"$mnt/etc/systemd/system.conf.d/amp-orb.conf"
 
-for m in dev dev/pts proc sys run; do mkdir -p "$mnt/$m"; mount --bind "/$m" "$mnt/$m"; done
+# The chroot runs the image's own programs as root on this host, so this
+# trusts the image (see docs/security.md). Give it an empty /run rather than
+# the host's, which holds the sockets of the host's systemd and D-Bus.
+for m in dev dev/pts proc sys; do mkdir -p "$mnt/$m"; mount --bind "/$m" "$mnt/$m"; done
+mkdir -p "$mnt/run"
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$mnt/run"
 rm -f "$mnt/etc/resolv.conf"
 cp /etc/resolv.conf "$mnt/etc/resolv.conf"
 

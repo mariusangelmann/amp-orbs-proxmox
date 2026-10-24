@@ -64,7 +64,9 @@ for s in $STORAGE $STATE_STORAGE; do
 	pveum acl modify "/storage/$s" --users "$PVE_USER" --roles "$ROLE"
 done
 pveum acl modify "/sdn/zones/$SDN_ZONE/$BRIDGE" --users "$PVE_USER" --roles "$ROLE"
-pveum acl modify /nodes --users "$PVE_USER" --roles "${ROLE}NodeAudit"
+# Only this node: Sys.Audit also shows every user's task logs and the node report.
+pveum acl delete /nodes --users "$PVE_USER" --roles "${ROLE}NodeAudit" 2>/dev/null || true
+pveum acl modify "/nodes/$(hostname)" --users "$PVE_USER" --roles "${ROLE}NodeAudit"
 
 log "API token $PVE_USER!$TOKEN_NAME"
 has_token() { pveum user token list "$PVE_USER" --output-format json | grep -q "\"tokenid\":\"$TOKEN_NAME\""; }

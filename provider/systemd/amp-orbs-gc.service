@@ -6,3 +6,7 @@ Type=oneshot
 User=amp-orbs
 Group=amp-orbs
 ExecStart=/usr/local/bin/amp-orbs-pve gc --yes
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes

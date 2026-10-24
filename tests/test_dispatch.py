@@ -97,6 +97,11 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(orb["status"], "running")
         self.assertIn("ORB_TOKEN=orb-token", self.state.exec_log[-1]["stdin"])
 
+    def test_values_that_could_add_env_lines_are_refused(self):
+        result = self.dispatch("spawn", AMP_URL="https://ampcode.com\nLD_PRELOAD=/tmp/x.so")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.state.exec_log, [])  # nothing reached the orb
+
     def test_pause_hibernates_and_spawn_resumes_the_same_vm(self):
         self.assertEqual(self.dispatch("spawn").returncode, 0)
         (orb,) = self.orbs().values()

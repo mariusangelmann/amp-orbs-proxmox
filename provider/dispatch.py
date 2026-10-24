@@ -53,6 +53,19 @@ def kernel_problem(release):
     return None
 
 
+def env_line(key, value):
+    """KEY=value for a systemd EnvironmentFile; refuses values that could add lines."""
+    if not value or re.search(r"[\x00-\x1f\x7f]", value):
+        raise ValueError(f"{key} is empty or contains control characters")
+    return f"{key}={value}"
+
+
+def guest_text(text, limit=2000):
+    """Output from inside an orb is untrusted: drop control characters, cap the length."""
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "?", (text or "").strip())
+    return text if len(text) <= limit else text[:limit] + " [truncated]"
+
+
 def log(message):
     print(f"[amp-orbs-pve] {message}", flush=True)
 
@@ -370,7 +383,7 @@ class Orbs:
             if status.get("exited"):
                 output = (status.get("out-data") or "") + (status.get("err-data") or "")
                 if status.get("exitcode", 0) != 0:
-                    raise RuntimeError(f"command in VM {vm['vmid']} failed: {output.strip()}")
+                    raise RuntimeError(f"command in VM {vm['vmid']} failed: {guest_text(output)}")
                 return output
             time.sleep(self.cfg.poll)
         raise TimeoutError(f"command in VM {vm['vmid']} did not finish within {timeout}s")
@@ -439,12 +452,12 @@ class Orbs:
             str(int(time.time())),
             name,
             base64.b64encode(notice.encode()).decode() if notice else "",
-            f"ORB_TOKEN={env['ORB_TOKEN']}",
+            env_line("ORB_TOKEN", env.get("ORB_TOKEN")),
         ]
         if env.get("AMP_URL"):
-            stdin.append(f"AMP_URL={env['AMP_URL']}")
+            stdin.append(env_line("AMP_URL", env["AMP_URL"]))
         output = self.guest_exec(vm, ["/bin/bash", "-c", BOOTSTRAP_SCRIPT], "\n".join(stdin) + "\n")
-        log(f"{name} ({vm['vmid']}): {output.strip()}")
+        log(f"{name} ({vm['vmid']}): {guest_text(output)}")
 
     def pause(self, env):
         name = orb_name(env["ORB_ID"])

@@ -25,20 +25,47 @@ dependencies, or a careless command can all run with root inside the orb, becaus
   token permissions, because listing updates through the API would require
   `Sys.Modify` on the node.
 - **A scoped API token.** The provider's token (`amp-orbs@pve!provider`) can manage VMs
-  in the `amp-orbs` pool, use the configured storage and bridge, and read node status.
-  It cannot touch other VMs, change host settings, or log in to the host. If the
+  in the `amp-orbs` pool, use the configured storage and bridge, and read this node's
+  status. It cannot touch other VMs or their disks and backups, change host settings,
+  or log in to the host. It can list the storage's contents and read its ISO and
+  container template files, and `Sys.Audit` on the node also lets it read every
+  user's task logs and the node's system report. If the
   provider container is compromised, the attacker gets that much and the Amp provider
   token, so keep the container updated and rotate tokens with `ROTATE=1
   host/setup-access.sh` and **Settings → Orbs**.
 - **No inbound connections.** Neither the provider nor the orbs need open ports. Amp
   never connects in.
 
+## Building the template
+
+`host/build-template.sh` unpacks Amp's orb image and installs a kernel and boot
+loader into it by running the image's own `apt` in a chroot, **as root on the Proxmox
+host**. The chroot does not get the host's `/run`, but it is not a security boundary:
+whoever controls the image you build from can take over the host at build time. Only
+build from images you trust, meaning Amp's image or your own. To build exactly the
+image you reviewed, pin it by digest:
+`IMAGE=us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb@sha256:… host/build-template.sh`.
+The template's description records the digest of every build.
+
+## What orbs share
+
+- **Project snapshots are shared.** A snapshot is a copy of one thread's orb, and
+  every later thread in that project, including other members' threads, starts from
+  it. Anything the first orb left on disk, from tools and caches to a backdoor planted
+  by a compromised agent, carries over. Amp-hosted orbs work the same way. Delete a
+  project's snapshots with `amp projects snapshots delete <project>` if you suspect one.
+- **Paused orbs are on disk.** A hibernated orb's state file contains its whole RAM,
+  including tokens held by running processes, unencrypted on your storage. Encrypt the
+  storage if that matters.
+
 ## Network
 
 By default orbs use the bridge you chose, usually `vmbr0`, which means they sit
 **on your LAN**. From there an orb can reach other machines, your router, the
-Proxmox web UI and SSH, and anything a VPN or Tailscale on that network exposes. For
-anything beyond a home lab, isolate them.
+Proxmox web UI and SSH, and anything a VPN or Tailscale on that network exposes.
+Because the agent is root in the orb, it can also send spoofed ARP replies and
+intercept other devices' traffic on that network. For anything beyond a home lab,
+isolate them.
 
 ### 1. Put orbs on their own network
 
@@ -73,6 +100,9 @@ OUT DROP -dest 100.64.0.0/10   # CGNAT, used by Tailscale
 OUT DROP -dest 169.254.0.0/16
 OUT DROP -dest fc00::/7
 ```
+
+If the host has a public or other non-private address, add `OUT DROP -dest <that
+address>` as well, so orbs cannot reach the Proxmox web UI and SSH through it.
 
 Then build the template with `FIREWALL=1`. The template gets a firewall file that
 enables the firewall and applies the `amp-orbs` group, and every orb and project
