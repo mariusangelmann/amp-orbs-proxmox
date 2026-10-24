@@ -8,9 +8,18 @@ disk and stops it. The next message resumes it with every process still running,
 so Terminal sessions, portal services, and Desktop apps survive a pause, just like
 Amp-hosted orbs. Idle orbs use no CPU or RAM.
 
-> **No guarantees.** This is a community project, not supported by Amp or Proxmox.
-> It runs code written by AI agents on your hardware. Read
-> [docs/security.md](docs/security.md) before you use it, and use it at your own risk.
+> [!WARNING]
+> **AI-generated, private project, not for enterprise use.**
+> The code and documentation in this repository were generated with Claude Opus 5.5,
+> an AI model by Anthropic, through Amp. Review it yourself before you run it. This is
+> a personal hobby project shared as is. It is not affiliated with, endorsed by, or supported
+> by Amp, Anthropic, or Proxmox. It has no warranty, support, or security response
+> process, so do not use it in production, for enterprise workloads, or anywhere
+> data or compliance matters. If you are on an Amp Enterprise plan, use
+> [Amp's supported setup](https://ampcode.com/docs/orbs/self-hosted) instead.
+
+> **No guarantees.** This project runs code written by AI agents on your hardware.
+> Read [docs/security.md](docs/security.md) before you use it, and use it at your own risk.
 
 ```
 ┌──────────────────────── Proxmox VE host ────────────────────────┐
@@ -182,3 +191,5 @@ See also [docs/troubleshooting.md](docs/troubleshooting.md).
 ## License
 
 [MIT](LICENSE). The software is provided as is, without warranty of any kind.
+It was generated with Claude Opus 5.5 and is not intended for enterprise use (see the
+notice at the top).
