@@ -33,6 +33,17 @@ for pkg in "${pending[@]}"; do
 	esac
 done
 
+# Isolated mode (install.sh writes /etc/default/amp-orbs-firewall): the
+# provider refuses to start orbs unless this reports the rules as active.
+orb_firewall=""
+if [ -f /etc/default/amp-orbs-firewall ]; then
+	if nft list table inet amp_orbs >/dev/null 2>&1 && nft list table bridge amp_orbs >/dev/null 2>&1; then
+		orb_firewall=active
+	else
+		orb_firewall=inactive
+	fi
+fi
+
 security_list=$(printf '%s, ' "${security[@]}")
 security_list=${security_list%, }
 
@@ -42,6 +53,7 @@ host-node: $(hostname)
 host-kernel: $running
 host-reboot-required: $reboot
 host-updates: ${#pending[@]}
-host-security-updates: $security_list"
+host-security-updates: $security_list
+host-orb-firewall: $orb_firewall"
 pveum pool modify "$POOL" --comment "$comment"
 echo "$comment"

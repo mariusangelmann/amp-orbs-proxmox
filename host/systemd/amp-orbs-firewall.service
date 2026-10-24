@@ -1,0 +1,19 @@
+[Unit]
+Description=Confine Amp orbs on their isolated network
+Documentation=https://github.com/mariusangelmann/amp-orbs-proxmox/blob/main/docs/security.md
+# Load before any guest starts; nftables matches the vnet by name, so the
+# rules work before the vnet exists.
+Before=pve-guests.service network-pre.target
+Wants=network-pre.target
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/amp-orbs-firewall
+ExecStart=/usr/local/sbin/amp-orbs-firewall
+ExecStop=/usr/local/sbin/amp-orbs-firewall --remove
+
+[Install]
+WantedBy=multi-user.target

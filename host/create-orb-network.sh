@@ -6,8 +6,8 @@
 # on your LAN. Afterwards use BRIDGE=$VNET SDN_ZONE=$ZONE with the other
 # scripts. Requires Proxmox VE 8.1 or later. Safe to rerun.
 #
-# NAT alone does not stop orbs from reaching your LAN or the host; see
-# docs/security.md for firewall rules.
+# NAT alone does not stop orbs from reaching your LAN or the host;
+# host/orb-firewall.sh does (install.sh sets both up).
 set -euo pipefail
 
 ZONE=${ZONE:-amporbs}                # max 8 characters
@@ -42,4 +42,9 @@ pvesh get "/cluster/sdn/vnets/$VNET/subnets/$subnet_id" >/dev/null 2>&1 ||
 
 log "Applying SDN configuration"
 pvesh set /cluster/sdn
+for _ in $(seq 30); do
+	ip link show "$VNET" >/dev/null 2>&1 && break
+	sleep 1
+done
+ip link show "$VNET" >/dev/null 2>&1 || { echo "vnet $VNET did not appear; check Datacenter -> SDN" >&2; exit 1; }
 log "Done. Use BRIDGE=$VNET SDN_ZONE=$ZONE for setup-access.sh and build-template.sh"

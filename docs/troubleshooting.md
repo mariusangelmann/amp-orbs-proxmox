@@ -18,6 +18,23 @@ updates (`apt update && apt full-upgrade`), make sure `proxmox-kernel-7.0` is at
 7.0.14-24, and **reboot**. `proxmox-boot-tool kernel list` shows which kernel boots
 next, in case one is pinned. See [security.md](security.md).
 
+## `refusing to run orbs on node …: its orb firewall is …`
+
+In isolated mode, the provider starts orbs only after the host reports that its orb
+firewall rules are loaded since the last boot. On the host:
+
+```sh
+systemctl status amp-orbs-firewall      # did the rules load?
+nft list table inet amp_orbs            # are they there?
+amp-orbs-host-status                    # report the state now (also runs 30 s after boot)
+```
+
+## The template build fails in guestfish or virt-customize
+
+The build runs in small libguestfs VMs. `LIBGUESTFS_DEBUG=1 LIBGUESTFS_TRACE=1
+host/build-template.sh` shows what happens inside them, and `libguestfs-test-tool`
+checks the setup. They need `/dev/kvm` and network access for `apt`.
+
 ## `no base template (amp-orb-base-*) in pool amp-orbs`
 
 The template build failed or ran with a different `POOL`. Run `host/build-template.sh`

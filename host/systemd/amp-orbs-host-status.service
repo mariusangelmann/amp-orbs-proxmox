@@ -1,7 +1,7 @@
 [Unit]
 Description=Record Proxmox VE update status for Amp orbs
 Wants=network-online.target
-After=network-online.target
+After=network-online.target pve-cluster.service amp-orbs-firewall.service
 
 [Service]
 Type=oneshot

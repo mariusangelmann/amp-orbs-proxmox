@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Build a Proxmox VE VM template from the Amp orb OCI image.
 #
-# Run as root on a Proxmox VE node. The image's root filesystem is unpacked
+# Run as root on a Proxmox VE node. The image's root filesystem is packed
 # into a fresh disk, a kernel, systemd, GRUB, and the QEMU guest agent are
 # added, and the disk is imported into a new VM that is converted to a
 # template named amp-orb-base-<timestamp> in the orb pool.
+#
+# Nothing from the image runs on the host, and the host never mounts the
+# disk: creating the filesystem, unpacking the image into it, and running
+# the image's package manager all happen inside throwaway libguestfs VMs.
 #
 # Every setting can be overridden through the environment; see the defaults
 # below. Rerun to pick up a newer Amp image: new orbs use the newest
@@ -14,7 +18,7 @@ set -euo pipefail
 IMAGE=${IMAGE:-us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb:latest}
 STORAGE=${STORAGE:-local}            # VM disk storage
 POOL=${POOL:-amp-orbs}
-BRIDGE=${BRIDGE:-vmbr0}
+BRIDGE=${BRIDGE:-vmbr0}              # Linux bridge or SDN vnet for orbs
 VLAN=${VLAN:-}                       # optional VLAN tag
 FIREWALL=${FIREWALL:-0}              # 1 = enable the PVE firewall for orbs
 FIREWALL_GROUP=${FIREWALL_GROUP:-amp-orbs}  # security group applied to orbs
@@ -36,32 +40,30 @@ command -v qm >/dev/null || die "qm not found; run this on a Proxmox VE node"
 pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "storage '$STORAGE' does not exist"
 ip link show "$BRIDGE" >/dev/null 2>&1 || die "bridge '$BRIDGE' does not exist"
 pvesh get "/pools/$POOL" >/dev/null 2>&1 || die "pool '$POOL' does not exist; run host/setup-access.sh first"
+[ -e /dev/kvm ] || die "/dev/kvm is missing; the build runs in a small VM"
 
 need_pkgs=()
 command -v skopeo >/dev/null || need_pkgs+=(skopeo)
 command -v umoci >/dev/null || need_pkgs+=(umoci)
+command -v virt-customize >/dev/null || need_pkgs+=(libguestfs-tools)
 if [ ${#need_pkgs[@]} -gt 0 ]; then
 	log "Installing ${need_pkgs[*]}"
-	apt-get update -qq && apt-get install -y -qq "${need_pkgs[@]}"
+	apt-get update -qq && apt-get install -y -qq --no-install-recommends "${need_pkgs[@]}"
 fi
+export LIBGUESTFS_BACKEND=direct     # run the build VM with QEMU directly, no libvirt
 
 mkdir -p "$WORKDIR"
+chmod 700 "$WORKDIR"
 avail_gb=$(df -BG --output=avail "$WORKDIR" | tail -1 | tr -dc 0-9)
-[ "$avail_gb" -ge 15 ] || die "need about 15 GB free in $WORKDIR (have ${avail_gb} GB); set WORKDIR"
+[ "$avail_gb" -ge 20 ] || die "need about 20 GB free in $WORKDIR (have ${avail_gb} GB); set WORKDIR"
 
 oci="$WORKDIR/oci"
 rootfs="$WORKDIR/rootfs"
+tarball="$WORKDIR/rootfs.tar"
 raw="$WORKDIR/disk.raw"
-mnt="$WORKDIR/mnt"
-loop=""
+files="$WORKDIR/files"
 
-cleanup() {
-	set +e
-	for m in dev/pts dev proc sys run; do mountpoint -q "$mnt/$m" && umount -l "$mnt/$m"; done
-	mountpoint -q "$mnt" && umount "$mnt"
-	[ -n "$loop" ] && losetup -d "$loop"
-	rm -rf "$oci" "$rootfs" "$raw" "$mnt"
-}
+cleanup() { rm -rf "$oci" "$rootfs" "$tarball" "$raw" "$files"; }
 cleanup # leftovers from an interrupted run
 trap cleanup EXIT
 
@@ -70,44 +72,30 @@ skopeo copy --override-os linux --override-arch amd64 "docker://$IMAGE" "oci:$oc
 digest=$(skopeo inspect --format '{{.Digest}}' "oci:$oci:orb")
 skopeo inspect --config "oci:$oci:orb" >"$WORKDIR/config.json"
 
+# umoci applies the layers (including whiteouts) without following links out
+# of the tree; tar then only reads it. Neither runs anything from the image.
 log "Unpacking root filesystem"
 umoci raw unpack --image "$oci:orb" "$rootfs"
-
-log "Creating $DISK_SIZE disk"
-truncate -s "$DISK_SIZE" "$raw"
-printf 'label: dos\nstart=2048, type=83, bootable\n' | sfdisk -q "$raw"
-loop=$(losetup -fP --show "$raw")
-mkfs.ext4 -q -L amp-orb "${loop}p1"
-mkdir -p "$mnt"
-mount "${loop}p1" "$mnt"
-cp -a "$rootfs/." "$mnt/"
+rm -rf "$oci"
+tar --numeric-owner --xattrs --xattrs-include='*' -C "$rootfs" -cf "$tarball" .
 rm -rf "$rootfs"
 
 # The OCI config's environment (PATH with /opt/git and /opt/amp-wayland,
 # LD_LIBRARY_PATH, NODE_OPTIONS, ...) only exists in container runtimes.
-# Recreate it for login shells and for the bootstrap unit.
-mkdir -p "$mnt/etc/amp-orb" "$mnt/etc/systemd/system.conf.d"
+# Recreate it for login shells and for the bootstrap unit. These files are
+# written here and copied in by the build VM, never through the image's paths.
+mkdir -p "$files"
 perl -MJSON::PP -e '
 	local $/; my $c = decode_json(<STDIN>);
 	for (@{ $c->{config}{Env} || [] }) { print "$_\n" }
-' <"$WORKDIR/config.json" >"$mnt/etc/amp-orb/image.env"
+' <"$WORKDIR/config.json" >"$files/image.env"
 sed -e 's/"/\\"/g' -e 's/^\([^=]*\)=\(.*\)$/export \1="\2"/' \
-	"$mnt/etc/amp-orb/image.env" >"$mnt/etc/profile.d/00-amp-orb-image.sh"
-image_path=$(sed -n 's/^PATH=//p' "$mnt/etc/amp-orb/image.env")
-printf '[Manager]\nDefaultEnvironment="PATH=%s"\n' "$image_path" \
-	>"$mnt/etc/systemd/system.conf.d/amp-orb.conf"
+	"$files/image.env" >"$files/00-amp-orb-image.sh"
+image_path=$(sed -n 's/^PATH=//p' "$files/image.env")
+printf '[Manager]\nDefaultEnvironment="PATH=%s"\n' "$image_path" >"$files/amp-orb.conf"
 
-# The chroot runs the image's own programs as root on this host, so this
-# trusts the image (see docs/security.md). Give it an empty /run rather than
-# the host's, which holds the sockets of the host's systemd and D-Bus.
-for m in dev dev/pts proc sys; do mkdir -p "$mnt/$m"; mount --bind "/$m" "$mnt/$m"; done
-mkdir -p "$mnt/run"
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$mnt/run"
-rm -f "$mnt/etc/resolv.conf"
-cp /etc/resolv.conf "$mnt/etc/resolv.conf"
-
-log "Installing kernel, systemd, GRUB, and the guest agent"
-cat >"$mnt/tmp/provision.sh" <<PROVISION
+cat >"$files/provision.sh" <<PROVISION
+#!/bin/bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
@@ -125,6 +113,7 @@ cat > /etc/fstab <<'EOF'
 LABEL=amp-orb / ext4 defaults,discard,errors=remount-ro 0 1
 EOF
 
+mkdir -p /etc/systemd/network
 cat > /etc/systemd/network/20-orb.network <<'EOF'
 [Match]
 Name=en* eth*
@@ -143,7 +132,9 @@ GRUB_CMDLINE_LINUX="root=LABEL=amp-orb console=tty0 console=ttyS0,115200"
 GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200"
 EOF
-grub-install --target=i386-pc --modules="part_msdos ext2" $loop
+root_dev=\$(findmnt -no SOURCE /)
+disk=\$(lsblk -npo PKNAME "\$root_dev" 2>/dev/null || true)
+grub-install --target=i386-pc --modules="part_msdos ext2" "\${disk:-/dev/sda}"
 update-grub
 
 # Let Amp's per-user services run without a login session.
@@ -157,15 +148,29 @@ echo amp-orb > /etc/hostname
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 PROVISION
-chroot "$mnt" /bin/bash /tmp/provision.sh
-rm -f "$mnt/tmp/provision.sh"
-ln -sf /run/systemd/resolve/stub-resolv.conf "$mnt/etc/resolv.conf"
 
-for m in dev/pts dev proc sys run; do umount -l "$mnt/$m"; done
-umount "$mnt"
-e2fsck -fy "${loop}p1" >/dev/null || [ $? -le 1 ]
-losetup -d "$loop"
-loop=""
+log "Creating $DISK_SIZE disk and unpacking the image into it (in a build VM)"
+truncate -s "$DISK_SIZE" "$raw"
+guestfish --rw --format=raw -a "$raw" <<GUESTFISH
+run
+part-disk /dev/sda mbr
+part-set-bootable /dev/sda 1 true
+mkfs ext4 /dev/sda1 label:amp-orb
+mount /dev/sda1 /
+tar-in "$tarball" / xattrs:true
+mkdir-p /etc/amp-orb
+mkdir-p /etc/profile.d
+mkdir-p /etc/systemd/system.conf.d
+upload "$files/image.env" /etc/amp-orb/image.env
+upload "$files/00-amp-orb-image.sh" /etc/profile.d/00-amp-orb-image.sh
+upload "$files/amp-orb.conf" /etc/systemd/system.conf.d/amp-orb.conf
+GUESTFISH
+rm -f "$tarball"
+
+log "Installing kernel, systemd, GRUB, and the guest agent (in a build VM)"
+virt-customize --format raw -a "$raw" --memsize 2048 --smp 2 \
+	--run "$files/provision.sh" \
+	--link /run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
 
 if [ -z "$VMID" ]; then
 	VMID=9000

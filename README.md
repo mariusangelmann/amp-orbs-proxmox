@@ -80,9 +80,9 @@ status is more than 2 days old, that is reported too.
 - Proxmox VE 9 (8 works but cannot pass the kernel check, because its kernels are no longer patched).
 - Running kernel `7.0.14-24-pve` or later. Check it with `uname -r`.
 - An x86-64 host with hardware virtualization.
-- A bridge where orbs get an address from DHCP and can reach the internet, or the
-  isolated network that [`host/create-orb-network.sh`](host/create-orb-network.sh) creates.
-- About 15 GB free in `/var/tmp` to build the template, and disk for the orbs (see Sizing).
+- Internet access for the host. By default the installer creates an isolated NAT
+  network for orbs, which needs Proxmox VE SDN (8.1 or later).
+- About 20 GB free in `/var/tmp` to build the template, and disk for the orbs (see Sizing).
 - An Amp workspace (individuals can create one for free).
 
 ## Quick start
@@ -98,18 +98,23 @@ status is more than 2 days old, that is reported too.
    ./install.sh
    ```
 
-   The installer asks for storage, bridge, VLAN, and orb size, and for the Amp token. Then it:
+   The installer asks for storage, the orb network, and orb size, and for the Amp token. Then it:
    1. checks the running kernel ([`host/check-kernel.sh`](host/check-kernel.sh));
-   2. creates the `amp-orbs` pool, a role, the `amp-orbs@pve` user, and an API token
+   2. unless you choose an existing bridge, creates an isolated NAT network for orbs
+      and host firewall rules that keep them off the host, your LAN, and each other
+      ([`host/create-orb-network.sh`](host/create-orb-network.sh),
+      [`host/orb-firewall.sh`](host/orb-firewall.sh));
+   3. creates the `amp-orbs` pool, a role, the `amp-orbs@pve` user, and an API token
       ([`host/setup-access.sh`](host/setup-access.sh));
-   3. builds the base template from Amp's orb image, which takes a few minutes
-      ([`host/build-template.sh`](host/build-template.sh));
-   4. creates a small Debian container (1 vCPU, 512 MB) that runs `amp orb provider` as a
+   4. builds the base template from Amp's orb image inside a throwaway VM, which takes
+      a few minutes ([`host/build-template.sh`](host/build-template.sh));
+   5. creates a small Debian container (1 vCPU, 512 MB) that runs `amp orb provider` as a
       systemd service and verifies its API access
       ([`host/create-provider-ct.sh`](host/create-provider-ct.sh)).
 
    To run it without prompts, set the answers in the environment, for example
-   `STORAGE=local BRIDGE=vmbr0 ./install.sh </dev/null`. Pass the token with
+   `STORAGE=local ./install.sh </dev/null`, or
+   `ORB_NETWORK=bridge BRIDGE=vmbr0 ./install.sh </dev/null` to use an existing bridge. Pass the token with
    `read -rs AMP_ORB_PROVIDER_TOKEN && export AMP_ORB_PROVIDER_TOKEN` first rather than on
    the command line, where it would end up in your shell history.
 
@@ -132,6 +137,7 @@ The installer's answers go to the template (cores, memory, disk, network) and to
 | --- | --- | --- |
 | `ORB_PAUSE` | `hibernate` | `shutdown` saves the RAM-sized state file per paused orb, but processes stop on pause. |
 | `ORB_CLONE` | `linked` | `full` copies the whole disk for each orb: slower, but independent of the template. |
+| `ORB_REQUIRE_FIREWALL` | `1` when isolated | Refuse orbs unless the host reports its orb firewall active since boot. |
 | `ORB_MAX_RUNNING` | `0` (no limit) | Refuse new orbs while this many run, to protect the host's RAM. |
 | `ORB_CORES`, `ORB_MEMORY_MB`, `ORB_BALLOON_MB` | template values | Size of new orbs. |
 | `ORB_STATE_STORAGE` | VM disk storage | Where hibernation state goes. |
@@ -188,8 +194,9 @@ also open the orb's console in the Proxmox UI.
   snapshots stay on the node where they were taken. Clusters work if the template and
   snapshots live on shared storage, but this is not tested.
 - **x86-64 only.** The template uses Amp's x64 image.
-- **Network trust.** Orbs get whatever network access the bridge gives them. See
-  [docs/security.md](docs/security.md).
+- **Network.** On the isolated network, orbs can't reach each other, so services
+  that span several orbs don't work. In bridge mode, orbs get whatever the bridge
+  gives them. See [docs/security.md](docs/security.md).
 - **Hibernation clock.** After a resume, the provider resets the guest clock and
   `systemd-timesyncd` keeps it accurate, but programs that measured time across the
   pause see a jump.

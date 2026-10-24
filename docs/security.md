@@ -38,12 +38,17 @@ dependencies, or a careless command can all run with root inside the orb, becaus
 
 ## Building the template
 
-`host/build-template.sh` unpacks Amp's orb image and installs a kernel and boot
-loader into it by running the image's own `apt` in a chroot, **as root on the Proxmox
-host**. The chroot does not get the host's `/run`, but it is not a security boundary:
-whoever controls the image you build from can take over the host at build time. Only
-build from images you trust, meaning Amp's image or your own. To build exactly the
-image you reviewed, pin it by digest:
+`host/build-template.sh` never runs anything from the orb image on the host, and
+the host never mounts the disk it builds. The host only downloads the image
+(`skopeo` checks every layer against its digest) and flattens its layers into a tar
+file (`umoci`, which does not follow links out of the tree). Creating the
+filesystem, unpacking the tar into it, and running the image's own `apt` to add a
+kernel and boot loader all happen inside throwaway libguestfs VMs, which are
+`guestfish` and `virt-customize`. A malicious image therefore has to escape a KVM
+VM, the same boundary that contains orbs. Proxmox treats the finished disk file as
+untrusted when it imports it.
+
+To build exactly the image you reviewed, pin it by digest:
 `IMAGE=us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb@sha256:… host/build-template.sh`.
 The template's description records the digest of every build.
 
@@ -60,30 +65,48 @@ The template's description records the digest of every build.
 
 ## Network
 
-By default orbs use the bridge you chose, usually `vmbr0`, which means they sit
-**on your LAN**. From there an orb can reach other machines, your router, the
-Proxmox web UI and SSH, and anything a VPN or Tailscale on that network exposes.
-Because the agent is root in the orb, it can also send spoofed ARP replies and
-intercept other devices' traffic on that network. For anything beyond a home lab,
-isolate them.
+### Isolated network (the default)
 
-### 1. Put orbs on their own network
+`install.sh` puts orbs on a network of their own unless you choose `bridge`:
 
-Use a separate VLAN with internet access and no route into the LAN, by setting
-`VLAN=<tag>` in the installer. Or create the NAT network that ships with this repo:
+- **`host/create-orb-network.sh`** creates an SDN zone `amporbs` with the vnet
+  `ampnet` (10.77.0.0/24), with DHCP and DNS from the host's dnsmasq and NAT to the
+  internet.
+- **`host/orb-firewall.sh`**, run by `amp-orbs-firewall.service` before any guest
+  starts, loads nftables rules of its own (`inet amp_orbs` and `bridge amp_orbs`). They
+  work whether or not the Proxmox firewall is enabled, and they only drop traffic:
+  - to the host, everything except DHCP and DNS from the vnet, so the web UI, SSH,
+    and other services are unreachable on every host address;
+  - forwarded, all private, CGNAT (Tailscale), link-local, loopback, and multicast
+    destinations, so orbs cannot reach your LAN or VPNs, plus all IPv6 from orbs and
+    any connection opened toward an orb from outside;
+  - bridged traffic between orbs, so one orb cannot reach or ARP-spoof another.
 
-```sh
-host/create-orb-network.sh        # SDN zone "amporbs", vnet "ampnet", 10.77.0.0/24, DHCP + SNAT
-BRIDGE=ampnet SDN_ZONE=amporbs FIREWALL=1 ./install.sh
-```
+**It fails closed.** The host-status timer runs 30 seconds after boot and every 6
+hours, and records whether both tables are loaded. With `ORB_REQUIRE_FIREWALL=1`,
+which `install.sh` sets in isolated mode, the provider refuses to start or resume
+orbs unless the host has reported the rules as active since it last booted.
 
-NAT hides the orbs from the LAN, but the orbs can still open connections into it
-through the host. Step 2 closes that.
+Check it from an orb's Terminal: `curl -m5 https://ampcode.com` works, while
+`curl -m5 -k https://10.77.0.1:8006` and any LAN address time out. On the host,
+`nft list table inet amp_orbs` shows counters for what was dropped.
+
+Orbs still need DNS. dnsmasq on the host forwards it to the host's resolvers, so
+orbs can resolve internal names that those resolvers know about.
 
 Keep the provider container on a network that can reach the Proxmox API
-(`PROVIDER_BRIDGE`, default `vmbr0`). Orbs never need the API.
+(`PROVIDER_BRIDGE`, default `vmbr0`). Orbs never need the API, and they cannot reach
+the container either.
 
-### 2. Block private ranges with the Proxmox firewall
+### Bridge mode
+
+With `ORB_NETWORK=bridge`, orbs sit on a bridge such as `vmbr0`, which usually means
+**on your LAN**. From there an orb can reach other machines, your router, the Proxmox
+web UI and SSH, and anything a VPN or Tailscale on that network exposes. Because the
+agent is root in the orb, it can also send spoofed ARP replies and intercept other
+devices' traffic. `orb-firewall.sh` does not apply. If you need bridge mode, use a
+dedicated VLAN (`VLAN=<tag>`) that only routes to the internet, or the Proxmox
+firewall:
 
 Create a security group in **Datacenter → Firewall → Security Group**, or in
 `/etc/pve/firewall/cluster.fw`:
@@ -102,20 +125,11 @@ OUT DROP -dest fc00::/7
 ```
 
 If the host has a public or other non-private address, add `OUT DROP -dest <that
-address>` as well, so orbs cannot reach the Proxmox web UI and SSH through it.
-
-Then build the template with `FIREWALL=1`. The template gets a firewall file that
-enables the firewall and applies the `amp-orbs` group, and every orb and project
-snapshot inherits it, because Proxmox copies a VM's firewall file when it is cloned.
-
-The firewall only filters VM traffic once it is **enabled at the datacenter level**
-(**Datacenter → Firewall → Options → Firewall: Yes**). Enabling it also applies the
-datacenter's default input policy to the host itself. Make sure the host's own
-rules still allow your SSH and web UI access, from the `management` IP set or
-`local_network`, before you turn it on, or you can lock yourself out.
-
-Test it from an orb's Terminal: `curl -m5 https://ampcode.com` should work, and
-`curl -m5 -k https://<host ip>:8006` should time out.
+address>` as well. Then build the template with `FIREWALL=1`; every orb inherits its
+firewall file. The rules only apply once the firewall is **enabled at the datacenter
+level**, which also applies the datacenter's input policy to the host itself. Make
+sure your SSH and web UI access stays allowed before you turn it on, or you can lock
+yourself out. ARP spoofing on the LAN is still possible in this mode.
 
 ### 3. Allow the outbound traffic Amp needs
 

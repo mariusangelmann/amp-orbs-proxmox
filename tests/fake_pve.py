@@ -26,6 +26,7 @@ class State:
         self.exec_log = []
         self.foreign_vmids = set()  # VMIDs that exist but are invisible to the token
         self.kernel = "7.0.14-24-pve"  # running kernel reported by /nodes/{node}/status
+        self.uptime = 3600  # seconds since the node booted
         self.pool_comment = "Amp orbs"  # host/host-status.sh writes the host status here
         self.task_ids = itertools.count(1)
         self.pids = itertools.count(100)
@@ -150,6 +151,7 @@ def route(state, method, path, p, raw):
         return {
             "kversion": f"Linux {state.kernel} #1 SMP PREEMPT_DYNAMIC PMX",
             "current-kernel": {"sysname": "Linux", "release": state.kernel, "machine": "x86_64"},
+            "uptime": state.uptime,
         }
     if parts[:2] == ["nodes", NODE] and parts[2] == "tasks":
         upid = urllib.parse.unquote(parts[3])

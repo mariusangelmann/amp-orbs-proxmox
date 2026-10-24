@@ -2,9 +2,8 @@
 Description=Check Proxmox VE updates for Amp orbs every 6 hours
 
 [Timer]
-OnBootSec=2min
+OnBootSec=30s
 OnUnitActiveSec=6h
-RandomizedDelaySec=10min
 
 [Install]
 WantedBy=timers.target

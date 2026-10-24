@@ -144,7 +144,8 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(self.dispatch("spawn").returncode, 0)
         self.assertEqual([vm["vmid"] for vm in self.orbs().values()], [20002])
 
-    def host_status(self, age=timedelta(hours=1), node="pve", reboot="", security="", updates=0):
+    def host_status(self, age=timedelta(minutes=30), node="pve", reboot="", security="", updates=0,
+                    firewall=""):
         checked = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.state.pool_comment = "\n".join([
             "Amp orbs (amp-orbs-proxmox)",
@@ -154,6 +155,7 @@ class DispatchTest(unittest.TestCase):
             f"host-reboot-required: {reboot}",
             f"host-updates: {updates}",
             f"host-security-updates: {security}",
+            f"host-orb-firewall: {firewall}",
         ])
 
     def agent_notice(self):
@@ -196,6 +198,35 @@ class DispatchTest(unittest.TestCase):
         self.host_status(node="pve2", reboot="7.0.15-2-pve")
         self.assertEqual(self.dispatch("spawn").returncode, 0)
         self.assertEqual(self.agent_notice(), "")
+
+    def test_isolated_mode_requires_the_orb_firewall_reported_since_boot(self):
+        isolated = {"ORB_REQUIRE_FIREWALL": "1"}
+        cases = [
+            # (firewall state, status age, node uptime, allowed?)
+            ("active", timedelta(minutes=30), 3600, True),
+            ("active", timedelta(minutes=30), 600, False),  # reported before the last boot
+            ("inactive", timedelta(minutes=5), 3600, False),
+            ("", timedelta(minutes=5), 3600, False),  # host never configured the firewall
+        ]
+        for i, (firewall, age, uptime, allowed) in enumerate(cases):
+            with self.subTest(firewall=firewall, uptime=uptime):
+                self.state.uptime = uptime
+                self.host_status(age=age, firewall=firewall)
+                runs = len(self.state.exec_log)
+                result = self.dispatch("spawn", orb_id=f"amp-T-{i}", **isolated)
+                self.assertEqual(result.returncode == 0, allowed, result.stdout)
+                self.assertEqual(len(self.state.exec_log) > runs, allowed)
+                if not allowed:
+                    self.assertIn("orb firewall", result.stdout)
+
+        # Resuming an existing orb is checked too.
+        self.state.uptime = 3600
+        self.host_status(firewall="active")
+        self.assertEqual(self.dispatch("spawn", orb_id="amp-T-r", **isolated).returncode, 0)
+        self.assertEqual(self.dispatch("pause", orb_id="amp-T-r", **isolated).returncode, 0)
+        self.host_status(firewall="inactive")
+        self.assertNotEqual(self.dispatch("spawn", orb_id="amp-T-r", **isolated).returncode, 0)
+        self.assertEqual(self.dispatch("delete", orb_id="amp-T-r", **isolated).returncode, 0)
 
     def test_kernel_verdicts_match_between_dispatch_and_host_script(self):
         sys.path.insert(0, str(DISPATCH.parent))

@@ -94,6 +94,9 @@ class Config:
         self.memory_mb = env.get("ORB_MEMORY_MB") or None
         self.balloon_mb = env.get("ORB_BALLOON_MB") or None
         self.max_running = int(env.get("ORB_MAX_RUNNING", "0"))
+        # Set by install.sh for the isolated network: refuse orbs unless the
+        # host reports its orb firewall rules loaded since its last boot.
+        self.require_firewall = env.get("ORB_REQUIRE_FIREWALL") == "1"
         self.lock_file = env.get("ORB_LOCK_FILE", "/tmp/amp-orbs-pve.lock")
         self.poll = float(env.get("ORB_POLL_SECONDS", "1"))
         if self.clone_mode not in ("linked", "full"):
@@ -258,9 +261,35 @@ class Orbs:
     def status(self, vm):
         return self.api.get(f"{self.vm_path(vm)}/status/current")
 
-    def ensure_safe_kernel(self, node):
-        """Refuse to run guests on a node whose running kernel allows a KVM escape."""
+    def ensure_safe_host(self, node):
+        """Refuse to run guests on a node that would not contain them."""
         status = self.api.get(f"/nodes/{node}/status")
+        release = self.ensure_safe_kernel(node, status)
+        if self.cfg.require_firewall:
+            self.ensure_firewall(node, status)
+        return release
+
+    def ensure_firewall(self, node, status):
+        fields = self.pool_fields()
+        boot = time.time() - float(status.get("uptime") or 0)
+        try:
+            checked = datetime.strptime(fields.get("host-status-checked", ""), "%Y-%m-%dT%H:%M:%SZ")
+            checked = checked.replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            checked = 0
+        state = fields.get("host-orb-firewall") or "unknown"
+        if fields.get("host-node") != node or checked < boot - 5:
+            state = "not reported since the node booted"
+        if state != "active":
+            raise RuntimeError(
+                f"refusing to run orbs on node {node}: its orb firewall is {state}, so orbs could "
+                "reach your LAN and the host. Check `systemctl status amp-orbs-firewall` and run "
+                "amp-orbs-host-status on the host (it runs 30 seconds after boot)"
+            )
+
+    def ensure_safe_kernel(self, node, status=None):
+        """Refuse to run guests on a node whose running kernel allows a KVM escape."""
+        status = status or self.api.get(f"/nodes/{node}/status")
         release = (status.get("current-kernel") or {}).get("release")
         if not release:
             # Older releases only report "Linux <release> #1 SMP ...".
@@ -274,14 +303,18 @@ class Orbs:
             )
         return release
 
+    def pool_fields(self):
+        """The host status host/host-status.sh keeps in the pool comment."""
+        pools = self.api.get("/pools", poolid=self.cfg.pool) or []
+        return parse_description((pools[0] if pools else {}).get("comment"))
+
     def host_warnings(self, node):
-        """Maintenance warnings from the status host/host-status.sh keeps in the pool comment."""
+        """Maintenance warnings from the host status."""
         try:
-            pools = self.api.get("/pools", poolid=self.cfg.pool) or []
+            fields = self.pool_fields()
         except ApiError as err:
             log(f"could not read the host status: {err}")
             return []
-        fields = parse_description((pools[0] if pools else {}).get("comment"))
         checked = fields.get("host-status-checked")
         if not checked:
             log("no host status yet; install the amp-orbs-host-status timer on the host (install.sh does)")
@@ -417,7 +450,7 @@ class Orbs:
             if source is None:
                 source = self.base_template(env.get("ORB_IMAGE"))
                 log(f"creating {name} from base template {source['name']} ({source['vmid']})")
-            self.ensure_safe_kernel(source["node"])  # the clone runs on its source's node
+            self.ensure_safe_host(source["node"])  # the clone runs on its source's node
             vm = self.allocate_and_clone(
                 source,
                 name,
@@ -435,7 +468,7 @@ class Orbs:
         else:
             if self.fields(vm).get("orb-id") != orb_id:
                 raise RuntimeError(f"VM {vm['vmid']} is named {name} but belongs to another orb")
-            self.ensure_safe_kernel(vm["node"])
+            self.ensure_safe_host(vm["node"])
             state = self.status(vm)
             if state.get("status") == "running" and state.get("qmpstatus") == "paused":
                 # Suspended to RAM (for example by hand): resume in place.
@@ -487,7 +520,7 @@ class Orbs:
             # A clean shutdown gives a consistent disk; hibernated VMs are
             # locked and cannot be cloned.
             if self.is_hibernated(vm):
-                self.ensure_safe_kernel(vm["node"])
+                self.ensure_safe_host(vm["node"])
                 self.start(vm)
             if self.status(vm).get("status") == "running":
                 # Clones of the snapshot must not share a machine ID: systemd
@@ -580,7 +613,7 @@ class Orbs:
         missing = sorted(REQUIRED_POOL_PRIVS - granted)
         if missing:
             raise SystemExit(f"token lacks privileges on /pool/{self.cfg.pool}: {', '.join(missing)}")
-        release = self.ensure_safe_kernel(self.cfg.node)
+        release = self.ensure_safe_host(self.cfg.node)
         log(f"node {self.cfg.node} runs kernel {release}, which is not affected by {KERNEL_ADVISORY.split(' (')[0]}")
         for warning in self.host_warnings(self.cfg.node):
             log(f"WARNING: {warning}")

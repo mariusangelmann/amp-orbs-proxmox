@@ -7,6 +7,8 @@
 #   cd amp-orbs-proxmox && ./install.sh
 #
 # It asks for a few settings (or reads them from the environment), then
+#   0. creates the isolated orb network and its firewall, unless you choose an
+#      existing bridge          (host/create-orb-network.sh, host/orb-firewall.sh)
 #   1. creates the pool, role, user, and API token   (host/setup-access.sh)
 #      and a timer that records host updates          (host/host-status.sh)
 #   2. builds the orb VM template                     (host/build-template.sh)
@@ -40,9 +42,28 @@ Press Enter to accept a default.
 
 EOF
 ask STORAGE "Storage for orb disks" "${default_storage:-local}"
-ask BRIDGE "Bridge or SDN vnet for orbs (needs DHCP and internet access)" vmbr0
-ask SDN_ZONE "SDN zone of that vnet (localnetwork for a plain bridge)" localnetwork
-ask VLAN "VLAN tag for orbs (empty for none)" ""
+cat <<'NETWORK'
+
+Orb network:
+  isolated  a NAT network of their own. Orbs reach the internet but not this host,
+            your LAN, your VPN or Tailscale, or each other. Recommended.
+  bridge    an existing bridge such as vmbr0. Orbs sit on that network as root
+            and can reach and attack everything on it.
+NETWORK
+ask ORB_NETWORK "Orb network (isolated or bridge)" isolated
+case "$ORB_NETWORK" in
+isolated)
+	export VNET=${VNET:-ampnet} ZONE=${ZONE:-amporbs}
+	export BRIDGE=$VNET SDN_ZONE=$ZONE VLAN=""
+	;;
+bridge)
+	ask BRIDGE "Bridge or SDN vnet for orbs (needs DHCP and internet access)" vmbr0
+	ask SDN_ZONE "SDN zone of that vnet (localnetwork for a plain bridge)" localnetwork
+	ask VLAN "VLAN tag for orbs (empty for none)" ""
+	echo "warning: orbs will be on '$BRIDGE' with no isolation; see docs/security.md" >&2
+	;;
+*) echo "ORB_NETWORK must be 'isolated' or 'bridge'" >&2; exit 1 ;;
+esac
 ask PROVIDER_BRIDGE "Bridge for the provider container (must reach this host and ampcode.com)" vmbr0
 ask CORES "vCPUs per orb" 2
 ask MEMORY_MB "RAM per orb in MB" 4096
@@ -56,6 +77,27 @@ fi
 export AMP_ORB_PROVIDER_TOKEN=${AMP_ORB_PROVIDER_TOKEN:-}
 export POOL=${POOL:-amp-orbs}
 
+if [ "$ORB_NETWORK" = isolated ]; then
+	"$here/host/create-orb-network.sh"
+	echo "==> Orb firewall"
+	command -v nft >/dev/null || { apt-get update -qq && apt-get install -y -qq nftables; }
+	install -m 0755 "$here/host/orb-firewall.sh" /usr/local/sbin/amp-orbs-firewall
+	install -m 0644 "$here/host/systemd/amp-orbs-firewall.service" /etc/systemd/system/
+	echo "VNET=$VNET" >/etc/default/amp-orbs-firewall
+	systemctl daemon-reload
+	systemctl enable amp-orbs-firewall.service >/dev/null
+	systemctl restart amp-orbs-firewall.service
+	require_firewall=1
+else
+	if [ -f /etc/default/amp-orbs-firewall ]; then
+		systemctl disable --now amp-orbs-firewall.service >/dev/null 2>&1 || true
+		rm -f /etc/default/amp-orbs-firewall
+	fi
+	require_firewall=0
+fi
+export EXTRA_ENV="${EXTRA_ENV:+$EXTRA_ENV
+}ORB_REQUIRE_FIREWALL=$require_firewall"
+
 "$here/host/setup-access.sh"
 
 echo "==> Host update status timer"
@@ -67,7 +109,12 @@ systemctl daemon-reload
 systemctl enable --now amp-orbs-host-status.timer >/dev/null
 /usr/local/sbin/amp-orbs-host-status >/dev/null || echo "warning: the first host status check failed" >&2
 
-if [ "${REBUILD_TEMPLATE:-0}" = 1 ] || ! qm list | awk '{print $2}' | grep -q '^amp-orb-base-'; then
+base=$(qm list | awk '$2 ~ /^amp-orb-base-/ {print $2, $1}' | sort | tail -1 | cut -d' ' -f2)
+if [ -n "$base" ] && ! qm config "$base" | grep -Eq "^net0:.*bridge=$BRIDGE(,|$)"; then
+	echo "==> The newest base template uses another network; building a new one"
+	REBUILD_TEMPLATE=1
+fi
+if [ "${REBUILD_TEMPLATE:-0}" = 1 ] || [ -z "$base" ]; then
 	"$here/host/build-template.sh"
 else
 	echo "==> A base template exists; skipping the build (REBUILD_TEMPLATE=1 builds a new one)"
