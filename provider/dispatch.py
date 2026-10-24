@@ -16,6 +16,7 @@ Run without ORB_OPERATION for operator commands:
 """
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -260,6 +261,54 @@ class Orbs:
             )
         return release
 
+    def host_warnings(self, node):
+        """Maintenance warnings from the status host/host-status.sh keeps in the pool comment."""
+        try:
+            pools = self.api.get("/pools", poolid=self.cfg.pool) or []
+        except ApiError as err:
+            log(f"could not read the host status: {err}")
+            return []
+        fields = parse_description((pools[0] if pools else {}).get("comment"))
+        checked = fields.get("host-status-checked")
+        if not checked:
+            log("no host status yet; install the amp-orbs-host-status timer on the host (install.sh does)")
+            return []
+        warnings = []
+        try:
+            age = time.time() - datetime.strptime(checked, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            age = float("inf")
+        if age > HOST_STATUS_MAX_AGE:
+            warnings.append(
+                f"The host's update status was last checked at {checked}, so it may be missing "
+                "security updates (is the amp-orbs-host-status timer running?)."
+            )
+        if fields.get("host-node") and fields["host-node"] != node:
+            return warnings  # the status describes another node
+        if fields.get("host-reboot-required"):
+            warnings.append(
+                f"Kernel {fields['host-reboot-required']} is installed but the host still runs "
+                f"{fields.get('host-kernel', 'an older kernel')}; reboot the host to use it."
+            )
+        if fields.get("host-security-updates"):
+            warnings.append(
+                f"Kernel and hypervisor updates are available: {fields['host-security-updates']}."
+            )
+        if fields.get("host-updates", "0") not in ("", "0"):
+            warnings.append(f"{fields['host-updates']} package updates are available in total.")
+        return warnings
+
+    def host_notice(self, node):
+        """Log host warnings and return guidance for the agent in the orb ("" if none)."""
+        warnings = self.host_warnings(node)
+        for warning in warnings:
+            log(f"WARNING: Proxmox host {node}: {warning}")
+        if not warnings:
+            return ""
+        items = "\n".join(f"- {warning}" for warning in warnings)
+        return HOST_NOTICE.format(node=node, items=items)
+
     # VM lifecycle helpers --------------------------------------------------
 
     def allocate_and_clone(self, source, name, full, description):
@@ -385,7 +434,13 @@ class Orbs:
                 log(f"{name} ({vm['vmid']}) is already running")
 
         self.wait_agent(vm)
-        stdin = [str(int(time.time())), name, f"ORB_TOKEN={env['ORB_TOKEN']}"]
+        notice = self.host_notice(vm["node"])
+        stdin = [
+            str(int(time.time())),
+            name,
+            base64.b64encode(notice.encode()).decode() if notice else "",
+            f"ORB_TOKEN={env['ORB_TOKEN']}",
+        ]
         if env.get("AMP_URL"):
             stdin.append(f"AMP_URL={env['AMP_URL']}")
         output = self.guest_exec(vm, ["/bin/bash", "-c", BOOTSTRAP_SCRIPT], "\n".join(stdin) + "\n")
@@ -514,6 +569,8 @@ class Orbs:
             raise SystemExit(f"token lacks privileges on /pool/{self.cfg.pool}: {', '.join(missing)}")
         release = self.ensure_safe_kernel(self.cfg.node)
         log(f"node {self.cfg.node} runs kernel {release}, which is not affected by {KERNEL_ADVISORY.split(' (')[0]}")
+        for warning in self.host_warnings(self.cfg.node):
+            log(f"WARNING: {warning}")
         base = self.base_template(None)
         log(f"pool {self.cfg.pool} OK; newest base template {base['name']} ({base['vmid']}) on {base['node']}")
 
@@ -530,6 +587,21 @@ REQUIRED_POOL_PRIVS = {
     "VM.GuestAgent.Unrestricted",
 }
 
+HOST_STATUS_MAX_AGE = 2 * 86400
+
+# Written to /etc/ampcode/AGENTS.md in the orb, which Amp always loads.
+HOST_NOTICE = """## Host maintenance notice
+
+This orb runs on a self-hosted Proxmox VE node ({node}) that needs maintenance:
+
+{items}
+
+At the start of your first reply in this thread, tell the user in one or two
+sentences, so the host's owner can update it. Mention it once, not in every
+reply. Do not try to fix it: the host is not reachable from this orb, and it is
+not part of the user's task.
+"""
+
 RESET_MACHINE_ID = ": > /etc/machine-id && rm -f /var/lib/dbus/machine-id"
 
 # Runs as root inside the orb through the QEMU guest agent. Reads the host
@@ -540,6 +612,20 @@ BOOTSTRAP_SCRIPT = r"""
 set -euo pipefail
 IFS= read -r epoch
 IFS= read -r name
+IFS= read -r notice
+# Host maintenance notice for the agent, in a marked block of the system-wide
+# guidance file, so other guidance there is kept.
+guidance=/etc/ampcode/AGENTS.md
+begin='<!-- amp-orbs-proxmox:host-notice -->'
+end='<!-- /amp-orbs-proxmox:host-notice -->'
+if [ -f "$guidance" ]; then
+  sed -i "\|^$begin\$|,\|^$end\$|d" "$guidance"
+fi
+if [ -n "$notice" ]; then
+  install -d -m 0755 /etc/ampcode
+  { echo "$begin"; base64 -d <<<"$notice"; echo "$end"; } >>"$guidance"
+fi
+if [ -f "$guidance" ] && [ ! -s "$guidance" ]; then rm -f "$guidance"; fi
 # The guest clock is stale after resuming from hibernation; TLS needs it.
 date -u -s "@$epoch" >/dev/null || true
 hostnamectl hostname "$name" 2>/dev/null || hostname "$name" || true

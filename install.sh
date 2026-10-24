@@ -8,6 +8,7 @@
 #
 # It asks for a few settings (or reads them from the environment), then
 #   1. creates the pool, role, user, and API token   (host/setup-access.sh)
+#      and a timer that records host updates          (host/host-status.sh)
 #   2. builds the orb VM template                     (host/build-template.sh)
 #   3. creates the provider container and starts it   (host/create-provider-ct.sh)
 # Rerun it to update; each step is safe to repeat.
@@ -56,6 +57,15 @@ export AMP_ORB_PROVIDER_TOKEN=${AMP_ORB_PROVIDER_TOKEN:-}
 export POOL=${POOL:-amp-orbs}
 
 "$here/host/setup-access.sh"
+
+echo "==> Host update status timer"
+install -m 0755 "$here/host/host-status.sh" /usr/local/sbin/amp-orbs-host-status
+install -m 0644 "$here/host/systemd/amp-orbs-host-status.service" \
+	"$here/host/systemd/amp-orbs-host-status.timer" /etc/systemd/system/
+echo "POOL=$POOL" >/etc/default/amp-orbs-host-status
+systemctl daemon-reload
+systemctl enable --now amp-orbs-host-status.timer >/dev/null
+/usr/local/sbin/amp-orbs-host-status >/dev/null || echo "warning: the first host status check failed" >&2
 
 if [ "${REBUILD_TEMPLATE:-0}" = 1 ] || ! qm list | awk '{print $2}' | grep -q '^amp-orb-base-'; then
 	"$here/host/build-template.sh"

@@ -60,6 +60,21 @@ and refuses to start on kernels affected by
 a guest-to-host KVM escape. You need `proxmox-kernel-7.0.14-24-pve` or later. Pausing
 and deleting orbs keep working. See [docs/security.md](docs/security.md).
 
+It also **warns when the host needs maintenance**. A timer on the host
+([`host/host-status.sh`](host/host-status.sh), every 6 hours) records whether a newer
+kernel is installed but not booted, which kernel and hypervisor packages
+(`proxmox-kernel-*`, `pve-qemu-kvm`, `qemu-server`, `pve-firmware`, microcode) can be
+upgraded, and how many updates are pending. On every spawn the provider:
+
+- prints the warnings to the thread's setup log and the provider log;
+- writes a short notice to `/etc/ampcode/AGENTS.md` in the orb, which Amp loads into
+  every thread. The agent tells you once at the start of the thread, and doesn't
+  try to fix the host.
+
+The notice is refreshed on every spawn and resume and disappears once the host is up
+to date. Warnings never block orbs; only a vulnerable running kernel does. If the
+status is more than 2 days old, that is reported too.
+
 ## Requirements
 
 - Proxmox VE 9 (8 works but cannot pass the kernel check, because its kernels are no longer patched).
@@ -140,10 +155,13 @@ Run these inside the provider container (`pct enter <ctid>`):
 
 ```sh
 journalctl -fu amp-orb-provider   # provider and dispatch log
-amp-orbs-pve check                # API access, permissions, kernel, template
+amp-orbs-pve check                # API access, permissions, kernel, host updates, template
 amp-orbs-pve list                 # orbs, snapshots, base templates
 amp-orbs-pve gc                   # what cleanup would delete; add --yes to delete
 ```
+
+On the host, `amp-orbs-host-status` refreshes the update status immediately, and
+`systemctl status amp-orbs-host-status.timer` shows when it last ran.
 
 A daily timer runs `amp-orbs-pve gc --yes`. It deletes project snapshots older than 14
 days and base templates that are not the newest. Templates that linked clones still

@@ -26,6 +26,7 @@ class State:
         self.exec_log = []
         self.foreign_vmids = set()  # VMIDs that exist but are invisible to the token
         self.kernel = "7.0.14-24-pve"  # running kernel reported by /nodes/{node}/status
+        self.pool_comment = "Amp orbs"  # host/host-status.sh writes the host status here
         self.task_ids = itertools.count(1)
         self.pids = itertools.count(100)
         self.clock = itertools.count(1)
@@ -143,6 +144,8 @@ def route(state, method, path, p, raw):
         if vmid in state.vms or vmid in state.foreign_vmids:
             raise ApiFailure(400, f"VM {vmid} already exists")
         return vmid
+    if path == "/pools":
+        return [{"poolid": p["poolid"], "comment": state.pool_comment}]
     if path == f"/nodes/{NODE}/status":
         return {
             "kversion": f"Linux {state.kernel} #1 SMP PREEMPT_DYNAMIC PMX",

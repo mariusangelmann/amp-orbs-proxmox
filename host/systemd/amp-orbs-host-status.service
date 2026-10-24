@@ -1,0 +1,9 @@
+[Unit]
+Description=Record Proxmox VE update status for Amp orbs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/amp-orbs-host-status
+ExecStart=/usr/local/sbin/amp-orbs-host-status

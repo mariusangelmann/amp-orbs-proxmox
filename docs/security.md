@@ -19,6 +19,11 @@ dependencies, or a careless command can all run with root inside the orb, becaus
   so reboot after a kernel update. Kernels newer than 7.0.14-24 pass. If a later
   advisory needs a higher minimum, raise `FIRST_FIXED_KERNEL` in
   `provider/dispatch.py` and the same version in `host/check-kernel.sh`.
+- **Update warnings.** A host timer records pending reboots and kernel and hypervisor
+  updates in the pool comment. The provider passes them to the setup log and to the
+  agent in each orb, so you hear about them in your threads. It needs no extra
+  token permissions, because listing updates through the API would require
+  `Sys.Modify` on the node.
 - **A scoped API token.** The provider's token (`amp-orbs@pve!provider`) can manage VMs
   in the `amp-orbs` pool, use the configured storage and bridge, and read node status.
   It cannot touch other VMs, change host settings, or log in to the host. If the

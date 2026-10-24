@@ -3,11 +3,13 @@
     python3 -m unittest discover -s tests
 """
 
+import base64
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -136,6 +138,59 @@ class DispatchTest(unittest.TestCase):
         self.state.foreign_vmids = {20000, 20001}
         self.assertEqual(self.dispatch("spawn").returncode, 0)
         self.assertEqual([vm["vmid"] for vm in self.orbs().values()], [20002])
+
+    def host_status(self, age=timedelta(hours=1), node="pve", reboot="", security="", updates=0):
+        checked = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.state.pool_comment = "\n".join([
+            "Amp orbs (amp-orbs-proxmox)",
+            f"host-status-checked: {checked}",
+            f"host-node: {node}",
+            "host-kernel: 7.0.14-24-pve",
+            f"host-reboot-required: {reboot}",
+            f"host-updates: {updates}",
+            f"host-security-updates: {security}",
+        ])
+
+    def agent_notice(self):
+        """The notice the last spawn handed to the orb (third stdin line), decoded."""
+        line = self.state.exec_log[-1]["stdin"].split("\n")[2]
+        return base64.b64decode(line).decode() if line else ""
+
+    def test_host_maintenance_is_reported_to_the_setup_log_and_the_agent(self):
+        self.host_status(reboot="7.0.15-2-pve", security="pve-qemu-kvm, proxmox-kernel-7.0", updates=12)
+        result = self.dispatch("spawn")
+        self.assertEqual(result.returncode, 0, result.stdout)  # warns, does not block
+        notice = self.agent_notice()
+        for text in ("7.0.15-2-pve", "reboot", "pve-qemu-kvm", "12 package updates"):
+            self.assertIn(text, result.stdout)
+            self.assertIn(text, notice)
+        self.assertIn("tell the user", notice)
+        # The bootstrap environment still follows the notice.
+        self.assertIn("\nORB_TOKEN=orb-token\n", self.state.exec_log[-1]["stdin"])
+
+    def test_up_to_date_host_gives_the_agent_no_notice_and_resume_clears_it(self):
+        self.host_status(updates=3)
+        self.assertEqual(self.dispatch("spawn").returncode, 0)
+        self.assertIn("3 package updates", self.agent_notice())
+        self.dispatch("pause")
+        self.host_status(updates=0)
+        self.assertEqual(self.dispatch("spawn").returncode, 0)
+        self.assertEqual(self.agent_notice(), "")
+
+    def test_stale_or_missing_host_status(self):
+        self.host_status(age=timedelta(days=3))
+        self.assertEqual(self.dispatch("spawn", orb_id="amp-T-1").returncode, 0)
+        self.assertIn("last checked", self.agent_notice())
+        # Never recorded (timer not installed): log only, nothing for the agent.
+        self.state.pool_comment = "Amp orbs"
+        result = self.dispatch("spawn", orb_id="amp-T-2")
+        self.assertIn("no host status yet", result.stdout)
+        self.assertEqual(self.agent_notice(), "")
+
+    def test_status_of_another_node_is_not_applied(self):
+        self.host_status(node="pve2", reboot="7.0.15-2-pve")
+        self.assertEqual(self.dispatch("spawn").returncode, 0)
+        self.assertEqual(self.agent_notice(), "")
 
     def test_kernel_verdicts_match_between_dispatch_and_host_script(self):
         sys.path.insert(0, str(DISPATCH.parent))
