@@ -1,0 +1,8 @@
+[Unit]
+Description=Delete old Amp orb project snapshots and unused base templates
+
+[Service]
+Type=oneshot
+User=amp-orbs
+Group=amp-orbs
+ExecStart=/usr/local/bin/amp-orbs-pve gc --yes

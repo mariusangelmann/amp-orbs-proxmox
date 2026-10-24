@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily cleanup of Amp orb project snapshots
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

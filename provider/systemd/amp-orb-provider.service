@@ -1,0 +1,20 @@
+[Unit]
+Description=Amp orb provider for Proxmox VE
+Documentation=https://github.com/mariusangelmann/amp-orbs-proxmox
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=amp-orbs
+Group=amp-orbs
+Environment=HOME=/var/lib/amp-orbs
+EnvironmentFile=/etc/amp-orbs-pve/provider.env
+WorkingDirectory=/var/lib/amp-orbs
+ExecStart=/usr/local/bin/amp orb provider /opt/amp-orbs-pve/dispatch.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Operator CLI: runs the dispatch program's check, list, and gc commands with
+# the provider's configuration, e.g. `amp-orbs-pve list`.
+set -euo pipefail
+set -a
+# shellcheck source=/dev/null
+. /etc/amp-orbs-pve/provider.env
+set +a
+unset ORB_OPERATION
+exec python3 /opt/amp-orbs-pve/dispatch.py "$@"
