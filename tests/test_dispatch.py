@@ -280,7 +280,8 @@ class ClusterCaTest(unittest.TestCase):
     def test_cluster_ca_is_trusted_and_other_cas_are_not(self):
         self.state.add_vm(9000, "amp-orb-base-202610240000", template=True)
         trusted = self.check("ca.pem")
-        self.assertIn("connected to Proxmox VE", trusted.stdout, trusted.stderr)
+        self.assertEqual(trusted.returncode, 0, trusted.stdout + trusted.stderr)
+        self.assertIn("connected to Proxmox VE", trusted.stdout)
         untrusted = self.check("other.pem")
         self.assertNotEqual(untrusted.returncode, 0)
         self.assertIn("CERTIFICATE_VERIFY_FAILED", untrusted.stderr)

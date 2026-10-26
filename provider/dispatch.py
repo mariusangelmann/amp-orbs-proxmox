@@ -159,16 +159,16 @@ class Api:
                 pass
             raise ApiError(err.code, str(detail).strip()) from None
 
-    def get(self, path, **params):
+    def get(self, path, /, **params):
         return self.call("GET", path, params)
 
-    def post(self, path, **params):
+    def post(self, path, /, **params):
         return self.call("POST", path, params)
 
-    def put(self, path, **params):
+    def put(self, path, /, **params):
         return self.call("PUT", path, params)
 
-    def delete(self, path, **params):
+    def delete(self, path, /, **params):
         return self.call("DELETE", path, params)
 
     def wait_task(self, upid, timeout=290):
