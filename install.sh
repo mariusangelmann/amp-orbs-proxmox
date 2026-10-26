@@ -124,7 +124,9 @@ disable_ballooning() {
 		conf=$(qm config "$id" 2>/dev/null) || continue # on another node
 		memory=$(sed -n 's/^memory: //p' <<<"$conf")
 		balloon=$(sed -n 's/^balloon: //p' <<<"$conf")
-		[ -n "$memory" ] && [ -n "$balloon" ] && [ "$balloon" != 0 ] && [ "$balloon" -lt "$memory" ] || continue
+		if [ -z "$memory" ] || [ -z "$balloon" ] || [ "$balloon" = 0 ] || [ "$balloon" -ge "$memory" ]; then
+			continue
+		fi
 		skiplock=()
 		case "$(sed -n 's/^lock: //p' <<<"$conf")" in
 		"") ;;
