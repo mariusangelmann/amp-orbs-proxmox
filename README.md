@@ -129,8 +129,24 @@ status is more than 2 days old, that is reported too.
 
 ## Configuration
 
-The installer's answers go to the template (cores, memory, disk, network) and to
-`/etc/amp-orbs-pve/provider.env` in the provider container. All provider settings are in
+To change settings later, rerun `./install.sh`. Once an install works (the provider
+container passes `amp-orbs-pve check`), it shows the current orb network, storage, orb
+size, and running-orb limit, asks what to change, and reruns only what that needs:
+
+| You change | What happens |
+| --- | --- |
+| vCPUs, RAM, max running orbs, Amp token | `provider.env` is updated and the provider restarts. |
+| Disk size | A new base template is built. |
+| Storage or orb network | Permissions for the new storage or network are added, and a new base template is built. |
+
+The Proxmox API token is never replaced, and the Amp token only when you enter a new
+one. New orbs use the new settings; existing orbs keep theirs. Set the answers in the
+environment to skip the prompts, for example `MEMORY_MB=8192 ./install.sh </dev/null`.
+`./install.sh --reinstall` runs every install step again instead.
+
+The installer's answers go to the template (network, disk) and to
+`/etc/amp-orbs-pve/provider.env` in the provider container (vCPUs and RAM as `ORB_CORES`
+and `ORB_MEMORY_MB`). All provider settings are in
 [`provider/provider.env.example`](provider/provider.env.example). The most useful ones:
 
 | Setting | Default | Meaning |
@@ -142,7 +158,7 @@ The installer's answers go to the template (cores, memory, disk, network) and to
 | `ORB_CORES`, `ORB_MEMORY_MB`, `ORB_BALLOON_MB` | template values | Size of new orbs. |
 | `ORB_STATE_STORAGE` | VM disk storage | Where hibernation state goes. |
 
-After editing, run `systemctl restart amp-orb-provider` in the container. To change the
+You can also edit that file directly; then run `systemctl restart amp-orb-provider` in the container. To change the
 template itself, rebuild it (see Updating).
 
 ### Sizing
