@@ -63,7 +63,17 @@ tarball="$WORKDIR/rootfs.tar"
 raw="$WORKDIR/disk.raw"
 files="$WORKDIR/files"
 
-cleanup() { rm -rf "$oci" "$rootfs" "$tarball" "$raw" "$files"; }
+# $oci is kept across failed runs as a download cache: skopeo skips layers it
+# already has. It is removed once a template is built.
+new_vmid=""
+cleanup() {
+	rm -rf "$rootfs" "$tarball" "$raw" "$files"
+	# A VM created by this run but never turned into a template is broken.
+	if [ -n "$new_vmid" ] && ! qm config "$new_vmid" 2>/dev/null | grep -q '^template: 1'; then
+		echo "==> Removing the unfinished template VM $new_vmid" >&2
+		qm destroy "$new_vmid" --purge >/dev/null 2>&1 || true
+	fi
+}
 cleanup # leftovers from an interrupted run
 trap cleanup EXIT
 
@@ -76,7 +86,6 @@ skopeo inspect --config "oci:$oci:orb" >"$WORKDIR/config.json"
 # of the tree; tar then only reads it. Neither runs anything from the image.
 log "Unpacking root filesystem"
 umoci raw unpack --image "$oci:orb" "$rootfs"
-rm -rf "$oci"
 tar --numeric-owner --xattrs --xattrs-include='*' -C "$rootfs" -cf "$tarball" .
 rm -rf "$rootfs"
 
@@ -192,6 +201,7 @@ case "$storage_type" in
 esac
 
 log "Creating template $name (VMID $VMID) on $STORAGE"
+new_vmid=$VMID
 qm create "$VMID" --name "$name" --pool "$POOL" \
 	--description "managed-by: amp-orbs-proxmox
 image: $IMAGE
@@ -213,5 +223,6 @@ if [ "$FIREWALL" = 1 ]; then
 	printf '[OPTIONS]\nenable: 1\n\n[RULES]\n%s\n' "$group_rule" >"/etc/pve/firewall/$VMID.fw"
 fi
 qm template "$VMID"
+rm -rf "$oci"
 
 log "Done: template $name (VMID $VMID) from $IMAGE@$digest"

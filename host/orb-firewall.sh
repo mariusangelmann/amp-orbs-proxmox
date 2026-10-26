@@ -20,15 +20,22 @@ VNET=${VNET:-ampnet}
 [ "$(id -u)" = 0 ] || { echo "run as root on the Proxmox VE host" >&2; exit 1; }
 command -v nft >/dev/null || { echo "nft not found; apt install nftables" >&2; exit 1; }
 
-for family in inet bridge; do
-	nft list table "$family" amp_orbs >/dev/null 2>&1 && nft delete table "$family" amp_orbs
-done
 if [ "${1:-}" = --remove ]; then
+	for family in inet bridge; do
+		nft list table "$family" amp_orbs >/dev/null 2>&1 && nft delete table "$family" amp_orbs
+	done
 	echo "==> Removed the amp_orbs rules"
 	exit 0
 fi
 
+# One transaction: the old rules are replaced, never briefly absent. The
+# empty declarations make the deletes work when the tables don't exist yet.
 nft -f - <<EOF
+table inet amp_orbs
+delete table inet amp_orbs
+table bridge amp_orbs
+delete table bridge amp_orbs
+
 table inet amp_orbs {
 	set blocked4 {
 		type ipv4_addr

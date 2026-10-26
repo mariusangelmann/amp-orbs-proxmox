@@ -26,22 +26,34 @@ if ! command -v dnsmasq >/dev/null; then
 	systemctl disable --now dnsmasq
 fi
 
+changed=0
 log "Zone $ZONE"
-pvesh get "/cluster/sdn/zones/$ZONE" >/dev/null 2>&1 ||
+if ! pvesh get "/cluster/sdn/zones/$ZONE" >/dev/null 2>&1; then
 	pvesh create /cluster/sdn/zones --type simple --zone "$ZONE" --dhcp dnsmasq --ipam pve
+	changed=1
+fi
 
 log "Vnet $VNET"
-pvesh get "/cluster/sdn/vnets/$VNET" >/dev/null 2>&1 ||
+if ! pvesh get "/cluster/sdn/vnets/$VNET" >/dev/null 2>&1; then
 	pvesh create /cluster/sdn/vnets --vnet "$VNET" --zone "$ZONE" --alias "Amp orbs"
+	changed=1
+fi
 
 log "Subnet $SUBNET"
 subnet_id="$ZONE-${SUBNET/\//-}"
-pvesh get "/cluster/sdn/vnets/$VNET/subnets/$subnet_id" >/dev/null 2>&1 ||
+if ! pvesh get "/cluster/sdn/vnets/$VNET/subnets/$subnet_id" >/dev/null 2>&1; then
 	pvesh create "/cluster/sdn/vnets/$VNET/subnets" --type subnet --subnet "$SUBNET" \
 		--gateway "$GATEWAY" --snat 1 --dhcp-range "start-address=$DHCP_START,end-address=$DHCP_END"
+	changed=1
+fi
 
-log "Applying SDN configuration"
-pvesh set /cluster/sdn
+# Applying reloads the host's network configuration, so only do it when needed.
+if [ "$changed" = 1 ] || ! ip link show "$VNET" >/dev/null 2>&1; then
+	log "Applying SDN configuration"
+	pvesh set /cluster/sdn
+else
+	log "SDN configuration is already applied"
+fi
 for _ in $(seq 30); do
 	ip link show "$VNET" >/dev/null 2>&1 && break
 	sleep 1

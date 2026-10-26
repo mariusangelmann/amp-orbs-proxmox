@@ -109,7 +109,10 @@ systemctl daemon-reload
 systemctl enable --now amp-orbs-host-status.timer >/dev/null
 /usr/local/sbin/amp-orbs-host-status >/dev/null || echo "warning: the first host status check failed" >&2
 
-base=$(qm list | awk '$2 ~ /^amp-orb-base-/ {print $2, $1}' | sort | tail -1 | cut -d' ' -f2)
+base=""
+for id in $(qm list | awk '$2 ~ /^amp-orb-base-/ {print $2, $1}' | sort | cut -d' ' -f2); do
+	qm config "$id" | grep -q '^template: 1' && base=$id # newest finished template
+done
 if [ -n "$base" ] && ! qm config "$base" | grep -Eq "^net0:.*bridge=$BRIDGE(,|$)"; then
 	echo "==> The newest base template uses another network; building a new one"
 	REBUILD_TEMPLATE=1
