@@ -99,7 +99,7 @@ fi
 	echo "AMP_ORB_PROVIDER_TOKEN=$AMP_ORB_PROVIDER_TOKEN"
 	echo "PVE_API_URL=$PVE_API_URL"
 	cat "$TOKEN_FILE"
-	echo "PVE_NODE=$(hostname)"
+	echo "PVE_NODE=$(uname -n | cut -d. -f1)" # the Proxmox node name
 	echo "PVE_POOL=$POOL"
 	echo "PVE_CA_FILE=/etc/amp-orbs-pve/pve-root-ca.pem"
 	if [ -n "$EXTRA_ENV" ]; then printf '%s\n' "$EXTRA_ENV"; fi

@@ -66,7 +66,11 @@ done
 pveum acl modify "/sdn/zones/$SDN_ZONE/$BRIDGE" --users "$PVE_USER" --roles "$ROLE"
 # Only this node: Sys.Audit also shows every user's task logs and the node report.
 pveum acl delete /nodes --users "$PVE_USER" --roles "${ROLE}NodeAudit" 2>/dev/null || true
-pveum acl modify "/nodes/$(hostname)" --users "$PVE_USER" --roles "${ROLE}NodeAudit"
+# Earlier versions granted it on /nodes/<full host name>, which is not a node.
+[ "$(hostname)" = "$(uname -n | cut -d. -f1)" ] ||
+	pveum acl delete "/nodes/$(hostname)" --users "$PVE_USER" --roles "${ROLE}NodeAudit" 2>/dev/null || true
+# Proxmox names the node after the short host name (uname -n up to the first dot).
+pveum acl modify "/nodes/$(uname -n | cut -d. -f1)" --users "$PVE_USER" --roles "${ROLE}NodeAudit"
 
 log "API token $PVE_USER!$TOKEN_NAME"
 has_token() { pveum user token list "$PVE_USER" --output-format json | grep -q "\"tokenid\":\"$TOKEN_NAME\""; }

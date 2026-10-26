@@ -49,7 +49,7 @@ security_list=${security_list%, }
 
 comment="Amp orbs (amp-orbs-proxmox)
 host-status-checked: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-host-node: $(hostname)
+host-node: $(uname -n | cut -d. -f1)
 host-kernel: $running
 host-reboot-required: $reboot
 host-updates: ${#pending[@]}
