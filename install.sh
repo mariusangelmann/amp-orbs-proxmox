@@ -109,6 +109,34 @@ ORB_MEMORY_MB=$MEMORY_MB${ORB_MAX_RUNNING:+
 ORB_MAX_RUNNING=$ORB_MAX_RUNNING}"
 }
 
+# Earlier versions let orbs balloon down to 1 GB. Proxmox starts a VM at that
+# minimum, and Amp sizes an orb's command memory limit from the RAM it sees at
+# boot, so such orbs ran out of memory with the host's RAM free. Give this
+# node's templates and orbs in the pool all of their RAM; hibernated orbs get it
+# when they resume.
+disable_ballooning() {
+	local id conf memory balloon skiplock
+	ballooning_fixed=0
+	for id in $(pvesh get /pools --poolid "$POOL" --output-format json | perl -MJSON::PP -0ne '
+		for my $p (@{ decode_json($_) }) {
+			print "$_->{vmid}\n" for grep { $_->{type} eq "qemu" } @{ $p->{members} || [] }
+		}'); do
+		conf=$(qm config "$id" 2>/dev/null) || continue # on another node
+		memory=$(sed -n 's/^memory: //p' <<<"$conf")
+		balloon=$(sed -n 's/^balloon: //p' <<<"$conf")
+		[ -n "$memory" ] && [ -n "$balloon" ] && [ "$balloon" != 0 ] && [ "$balloon" -lt "$memory" ] || continue
+		skiplock=()
+		case "$(sed -n 's/^lock: //p' <<<"$conf")" in
+		"") ;;
+		suspended) skiplock=(--skiplock 1) ;; # hibernated: same RAM, only the balloon target changes
+		*) echo "warning: VM $id is locked; set its balloon to $memory later with qm set" >&2; continue ;;
+		esac
+		qm set "$id" --balloon "$memory" "${skiplock[@]}" >/dev/null
+		ballooning_fixed=$((ballooning_fixed + 1))
+	done
+	[ "$ballooning_fixed" = 0 ] || echo "==> Turned off ballooning for $ballooning_fixed orb VMs and templates"
+}
+
 ask_amp_token() { # ask_amp_token "prompt" ["hint"]
 	if [ -z "${AMP_ORB_PROVIDER_TOKEN:-}" ] && [ -t 0 ]; then
 		echo
@@ -182,7 +210,10 @@ EOF
 	ask ORB_MAX_RUNNING "Max running orbs (0 = no limit)" "${cur_max:-0}"
 	ask_amp_token "New Amp orb provider token (empty keeps the current one): "
 
+	disable_ballooning
 	network_changed=0 storage_changed=0 template_changed=0 provider_changed=0
+	# The provider predates the fix too: update its dispatch program.
+	[ "$ballooning_fixed" = 0 ] || provider_changed=1
 	[ "$ORB_NETWORK|$BRIDGE|$VLAN" = "$cur_network|$cur_bridge|$cur_vlan" ] || network_changed=1
 	[ "$network_changed" = 1 ] || [ "$SDN_ZONE" = "$cur_zone" ] || network_changed=1
 	[ "$STORAGE" = "$cur_storage" ] || storage_changed=1
@@ -257,6 +288,7 @@ if [ "${REBUILD_TEMPLATE:-0}" = 1 ] || [ -z "$base" ]; then
 else
 	echo "==> A base template exists; skipping the build (REBUILD_TEMPLATE=1 builds a new one)"
 fi
+disable_ballooning
 
 "$here/host/create-provider-ct.sh"
 

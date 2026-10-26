@@ -460,13 +460,17 @@ class Orbs:
                 full=self.cfg.clone_mode == "full",
                 description=describe(**{"orb-id": orb_id, "source": source["name"], "created": now_iso()}),
             )
-            overrides = {
-                "cores": self.cfg.cores,
-                "memory": self.cfg.memory_mb,
-                "balloon": self.cfg.balloon_mb,
-            }
-            if any(overrides.values()):
-                self.api.put(f"{self.vm_path(vm)}/config", **overrides)
+            # Proxmox starts a VM with its balloon inflated to the minimum, and
+            # `amp orb bootstrap` sizes the orb's workload cgroup from the RAM
+            # the guest sees at that moment. So unless ORB_BALLOON_MB asks for
+            # ballooning, give the orb all of its RAM from boot.
+            memory = self.cfg.memory_mb or self.api.get(f"{self.vm_path(vm)}/config")["memory"]
+            self.api.put(
+                f"{self.vm_path(vm)}/config",
+                cores=self.cfg.cores,
+                memory=self.cfg.memory_mb,
+                balloon=self.cfg.balloon_mb or memory,
+            )
             self.start(vm)
         else:
             if self.fields(vm).get("orb-id") != orb_id:

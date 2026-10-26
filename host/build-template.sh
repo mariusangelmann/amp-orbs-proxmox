@@ -24,7 +24,7 @@ FIREWALL=${FIREWALL:-0}              # 1 = enable the PVE firewall for orbs
 FIREWALL_GROUP=${FIREWALL_GROUP:-amp-orbs}  # security group applied to orbs
 CORES=${CORES:-2}
 MEMORY_MB=${MEMORY_MB:-4096}
-BALLOON_MB=${BALLOON_MB:-1024}       # the host may reclaim RAM down to this
+BALLOON_MB=${BALLOON_MB:-$MEMORY_MB} # below MEMORY_MB, orbs boot with only this much (see README)
 DISK_SIZE=${DISK_SIZE:-32G}          # thin-provisioned
 CPU_TYPE=${CPU_TYPE:-host}
 KERNEL_PKG=${KERNEL_PKG:-linux-image-cloud-amd64}

@@ -98,6 +98,17 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(orb["status"], "running")
         self.assertIn("ORB_TOKEN=orb-token", self.state.exec_log[-1]["stdin"])
 
+    def test_orbs_boot_with_all_their_ram_unless_ballooning_is_asked_for(self):
+        # The template balloons down to 1024 MB, as templates built before did.
+        cases = [({}, 4096, 4096), ({"ORB_MEMORY_MB": "8192"}, 8192, 8192),
+                 ({"ORB_MEMORY_MB": "8192", "ORB_BALLOON_MB": "2048"}, 8192, 2048)]
+        for i, (extra, memory, balloon) in enumerate(cases):
+            with self.subTest(**extra):
+                result = self.dispatch("spawn", orb_id=f"amp-T-{i}", **extra)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                config = self.orbs()[f"orb-amp-t-{i}"]["config"]
+                self.assertEqual((config["memory"], config["balloon"]), (memory, balloon))
+
     def test_values_that_could_add_env_lines_are_refused(self):
         result = self.dispatch("spawn", AMP_URL="https://ampcode.com\nLD_PRELOAD=/tmp/x.so")
         self.assertNotEqual(result.returncode, 0)

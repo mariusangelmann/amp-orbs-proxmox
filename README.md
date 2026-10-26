@@ -155,7 +155,8 @@ and `ORB_MEMORY_MB`). All provider settings are in
 | `ORB_CLONE` | `linked` | `full` copies the whole disk for each orb: slower, but independent of the template. |
 | `ORB_REQUIRE_FIREWALL` | `1` when isolated | Refuse orbs unless the host reports its orb firewall active since boot. |
 | `ORB_MAX_RUNNING` | `0` (no limit) | Refuse new orbs while this many run, to protect the host's RAM. |
-| `ORB_CORES`, `ORB_MEMORY_MB`, `ORB_BALLOON_MB` | template values | Size of new orbs. |
+| `ORB_CORES`, `ORB_MEMORY_MB` | template values | Size of new orbs. |
+| `ORB_BALLOON_MB` | `ORB_MEMORY_MB` (no ballooning) | Lower it to let the host reclaim orb RAM. Orbs then boot with only this much, and Amp caps their commands to what they saw at boot. |
 | `ORB_STATE_STORAGE` | VM disk storage | Where hibernation state goes. |
 
 You can also edit that file directly; then run `systemctl restart amp-orb-provider` in the container. To change the
@@ -163,9 +164,9 @@ template itself, rebuild it (see Updating).
 
 ### Sizing
 
-The default orb has 2 vCPUs and 4 GB RAM, with ballooning down to 1 GB, and a 32 GB thin disk.
+The default orb has 2 vCPUs, 4 GB RAM without ballooning, and a 32 GB thin disk.
 
-- **RAM:** only running orbs use RAM. Size `ORB_MAX_RUNNING` so the running orbs fit.
+- **RAM:** only running orbs use RAM, each its full size. Size `ORB_MAX_RUNNING` so the running orbs fit.
 - **Disk:** a linked clone starts at a few hundred MB and grows with what the agent
   installs. Each hibernated orb also keeps a state file about as large as its RAM.
   The template is about 5 GB, and each project snapshot is a full copy.
@@ -199,8 +200,8 @@ also open the orb's console in the Proxmox UI.
 - **Amp's orb image:** rerun `host/build-template.sh` with the same settings. New orbs
   use the newest template, existing orbs keep theirs, and `gc` removes old templates
   once no orb uses them. The Amp CLI inside orbs updates itself.
-- **This repository:** `git pull`, then rerun `host/create-provider-ct.sh` to update the
-  dispatch program. Your settings and the Amp token are kept.
+- **This repository:** `git pull`, then rerun `./install.sh` (or `host/create-provider-ct.sh`
+  to only update the dispatch program). Your settings and the Amp token are kept.
 - **Proxmox kernel:** install updates and reboot as usual. Orbs on a node do not
   start again until it runs a kernel that passes the check.
 

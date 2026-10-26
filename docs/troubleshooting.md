@@ -73,6 +73,17 @@ first, which needs the guest agent. If a VM is stuck with a lock after a crash, 
 it on the host with `qm unlock <vmid>`. Delete a broken orb with `qm destroy <vmid> --purge`;
 the next message in its thread creates a new one, and Amp sets it up again.
 
+## Orbs run out of memory while Proxmox shows plenty free
+
+Amp limits an orb's commands to a share of the RAM the orb sees when Amp starts in it
+(`systemctl cat amp-workload.slice` in the orb shows the limit). With ballooning,
+Proxmox starts the VM at its balloon minimum and gives the rest back later, so the limit
+stays small. Orbs no longer balloon unless `ORB_BALLOON_MB` is set. After updating
+from a version that ballooned, rerun `./install.sh`: it gives the templates and
+orbs in the pool all of their RAM and updates the provider. A running or hibernated
+orb keeps its small limit until Amp sets the limit again. If it still runs out,
+delete it with `qm destroy <vmid> --purge`. The thread's next message creates a new one.
+
 ## Disk fills up
 
 Every hibernated orb keeps a state file as large as its RAM, and every project snapshot
