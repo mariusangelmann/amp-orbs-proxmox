@@ -120,8 +120,9 @@ for f in dispatch.py amp-orbs-pve install-provider.sh provider.env.example \
 done
 pct push "$CT_ID" /etc/pve/pve-root-ca.pem "$dest/pve-root-ca.pem"
 pct push "$CT_ID" "$stage/provider.env" "$dest/provider.env" --perms 0600
-pct exec "$CT_ID" -- bash "$dest/install-provider.sh" "$dest/provider.env"
+pct exec "$CT_ID" -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 bash "$dest/install-provider.sh" "$dest/provider.env"
 pct exec "$CT_ID" -- rm -rf "$dest"
 
 log "Checking API access from the container"
-pct exec "$CT_ID" -- amp-orbs-pve check
+# pct exec does not search /usr/local/bin, so use the full path.
+pct exec "$CT_ID" -- /usr/local/bin/amp-orbs-pve check

@@ -131,7 +131,7 @@ Done. Next:
   * In Amp, start a thread with Orb -> Self-Hosted -> your provider, or run
       amp -ox "hello" --orb-provider <provider name>
   * Provider logs:   pct exec \$(pct list | awk '/amp-orb-provider/ {print \$1}') -- journalctl -fu amp-orb-provider
-  * List orbs:       pct exec <ct id> -- amp-orbs-pve list
+  * List orbs:       pct exec <ct id> -- /usr/local/bin/amp-orbs-pve list
 EOF
 if [ -z "$AMP_ORB_PROVIDER_TOKEN" ]; then
 	echo "  * No Amp token yet: rerun with AMP_ORB_PROVIDER_TOKEN=aop_live_... ./install.sh"
