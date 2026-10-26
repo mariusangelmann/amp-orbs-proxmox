@@ -5,6 +5,7 @@
 
 import base64
 import os
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -236,6 +237,53 @@ class DispatchTest(unittest.TestCase):
                 self.assertEqual(dispatch.kernel_problem(release) is None, safe)
                 script = subprocess.run(["bash", str(CHECK_KERNEL), release], capture_output=True)
                 self.assertEqual(script.returncode == 0, safe)
+
+
+class ClusterCaTest(unittest.TestCase):
+    """The Proxmox cluster CA has no key usage extension, which Python 3.13 rejects by default."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        d = Path(self.dir.name)
+        (d / "ca.cnf").write_text("[req]\ndistinguished_name=dn\n[dn]\n[ca]\nbasicConstraints=critical,CA:TRUE\n")
+        (d / "srv.ext").write_text("subjectAltName=DNS:pve\nkeyUsage=digitalSignature,keyEncipherment\n")
+
+        def run(*args):
+            subprocess.run(["openssl", *args], cwd=d, check=True, capture_output=True)
+
+        for name, cn in (("ca", "Proxmox Virtual Environment"), ("other", "Other CA")):
+            run("req", "-x509", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", f"{name}.key",
+                "-out", f"{name}.pem", "-days", "2", "-subj", f"/CN={cn}", "-config", "ca.cnf", "-extensions", "ca")
+        run("req", "-new", "-nodes", "-newkey", "rsa:2048", "-keyout", "srv.key", "-out", "srv.csr", "-subj", "/CN=pve")
+        run("x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+            "-out", "srv.pem", "-days", "2", "-extfile", "srv.ext")
+        self.state, self.server = fake_pve.serve()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(d / "srv.pem", d / "srv.key")
+        self.server.socket = ctx.wrap_socket(self.server.socket, server_side=True)
+
+    def check(self, ca_file):
+        env = {
+            "PATH": os.environ["PATH"],
+            "PVE_API_URL": f"https://127.0.0.1:{self.server.server_port}",
+            "PVE_TOKEN_ID": "amp-orbs@pve!provider",
+            "PVE_TOKEN_SECRET": "secret",
+            "PVE_NODE": "pve",
+            "PVE_CA_FILE": str(Path(self.dir.name) / ca_file),
+        }
+        return subprocess.run([sys.executable, "-I", str(DISPATCH), "check"], env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_cluster_ca_is_trusted_and_other_cas_are_not(self):
+        self.state.add_vm(9000, "amp-orb-base-202610240000", template=True)
+        trusted = self.check("ca.pem")
+        self.assertIn("connected to Proxmox VE", trusted.stdout, trusted.stderr)
+        untrusted = self.check("other.pem")
+        self.assertNotEqual(untrusted.returncode, 0)
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", untrusted.stderr)
 
 
 if __name__ == "__main__":

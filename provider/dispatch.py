@@ -122,6 +122,9 @@ class Api:
                 # The cluster CA is private to this cluster; node certificates
                 # often lack the IP or name used to reach the API.
                 self.ctx.check_hostname = False
+                # Python 3.13 rejects CAs without a key usage extension, and
+                # the Proxmox cluster CA has none. Signatures are still checked.
+                self.ctx.verify_flags &= ~getattr(ssl, "VERIFY_X509_STRICT", 0)
 
     def call(self, method, path, params=None):
         url = f"{self.cfg.api_url}/api2/json{path}"
