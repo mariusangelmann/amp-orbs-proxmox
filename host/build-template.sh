@@ -169,7 +169,8 @@ rm -f "$tarball"
 
 log "Installing kernel, systemd, GRUB, and the guest agent (in a build VM)"
 virt-customize --format raw -a "$raw" --memsize 2048 --smp 2 \
-	--run "$files/provision.sh" \
+	--upload "$files/provision.sh:/tmp/amp-orb-provision.sh" \
+	--run-command 'bash /tmp/amp-orb-provision.sh && rm -f /tmp/amp-orb-provision.sh' \
 	--link /run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
 
 if [ -z "$VMID" ]; then
