@@ -36,6 +36,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root on the Proxmox VE host"
 command -v qm >/dev/null || die "qm not found; run this on a Proxmox VE node"
+[ "$(dpkg --print-architecture)" = amd64 ] || die "only x86-64 hosts are supported (the template uses Amp's x64 image)"
 "$(dirname "$0")/check-kernel.sh"
 pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "storage '$STORAGE' does not exist"
 ip link show "$BRIDGE" >/dev/null 2>&1 || die "bridge '$BRIDGE' does not exist"

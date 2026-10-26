@@ -33,6 +33,21 @@ if [ -z "$CT_ID" ]; then
 	CT_ID=$(pct list | awk -v h="$CT_HOSTNAME" 'NR>1 && $NF==h {print $1; exit}')
 fi
 
+arch=$(dpkg --print-architecture)
+
+# An earlier version could pick a container template for another CPU
+# architecture; such a container never starts. Replace it if we made it.
+if [ -n "$CT_ID" ] && pct status "$CT_ID" >/dev/null 2>&1; then
+	ct_arch=$(pct config "$CT_ID" | sed -n 's/^arch: //p')
+	if [ -n "$ct_arch" ] && [ "$ct_arch" != "$arch" ]; then
+		pct config "$CT_ID" | grep -q 'amp-orbs-proxmox' ||
+			die "container $CT_ID ($CT_HOSTNAME) is $ct_arch, not $arch, and was not created by this script; set CT_ID"
+		log "Replacing container $CT_ID: it is $ct_arch, but this host is $arch"
+		pct stop "$CT_ID" >/dev/null 2>&1 || true
+		pct destroy "$CT_ID" --purge
+	fi
+fi
+
 if [ -z "$CT_ID" ] || ! pct status "$CT_ID" >/dev/null 2>&1; then
 	[ -n "$CT_ID" ] || CT_ID=$(pvesh get /cluster/nextid)
 	if [ -z "$CT_STORAGE" ]; then
@@ -41,9 +56,11 @@ if [ -z "$CT_ID" ] || ! pct status "$CT_ID" >/dev/null 2>&1; then
 	fi
 	log "Fetching Debian container template"
 	pveam update >/dev/null || true
-	tmpl=$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | sort -V | tail -1)
-	[ -n "$tmpl" ] || tmpl=$(pveam available --section system | awk '/debian-12-standard/ {print $2}' | sort -V | tail -1)
-	[ -n "$tmpl" ] || die "no Debian container template available from pveam"
+	# Template names end in _<arch>.tar.*; pick the newest for this host's CPU.
+	newest() { pveam available --section system | awk -v p="^$1_.*_${arch}[.]tar" '$2 ~ p {print $2}' | sort -V | tail -1; }
+	tmpl=$(newest debian-13-standard)
+	[ -n "$tmpl" ] || tmpl=$(newest debian-12-standard)
+	[ -n "$tmpl" ] || die "no Debian container template for $arch available from pveam"
 	pveam list "$TEMPLATE_STORAGE" | grep -q "$tmpl" || pveam download "$TEMPLATE_STORAGE" "$tmpl"
 
 	net="name=eth0,bridge=$PROVIDER_BRIDGE,ip=$PROVIDER_IP"
