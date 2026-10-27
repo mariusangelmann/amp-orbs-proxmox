@@ -690,6 +690,9 @@ props=(-p WorkingDirectory=/home/user -p EnvironmentFile=/run/amp-orb/bootstrap.
 if [ -r /etc/amp-orb/image.env ]; then
   props=(-p EnvironmentFile=/etc/amp-orb/image.env "${props[@]}")
 fi
+# A bootstrap from before a pause survives the resume with its expired token, and
+# holds the lock that makes the new one exit at once. Replace it.
+systemctl stop 'amp-orb-bootstrap-*.service' 2>/dev/null || true
 unit="amp-orb-bootstrap-$(date +%s)-$$"
 systemd-run --quiet --collect --unit="$unit" --uid=user --gid=user "${props[@]}" \
   --setenv=HOME=/home/user --setenv=USER=user --setenv=LOGNAME=user \
